@@ -241,7 +241,7 @@ func (s *Server) checkUpdates(ctx context.Context) ([]UpdateInfo, error) {
 			s.log.Warn("remote update check inspect new failed", "container", c.Name, "image", c.Image, "error", err)
 			continue
 		}
-		if normalizeID(oldVersion.ID) != normalizeID(newVersion.ID) {
+		if !dockerx.SameEffectiveImage(oldVersion, newVersion) {
 			updates = append(updates, UpdateInfo{Container: c, OldVersion: oldVersion, NewVersion: newVersion})
 		}
 	}

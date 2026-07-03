@@ -27,6 +27,7 @@ type ImageVersion struct {
 	Digest    string
 	Tag       string
 	RemoteTag string
+	Revision  string
 }
 
 func (v ImageVersion) Display() string {
@@ -53,6 +54,28 @@ func (v ImageVersion) SameTag(other ImageVersion) bool {
 	return v.Tag != "" && v.Tag == other.Tag
 }
 
+// SameEffectiveImage reports whether two image inspections point to the same
+// runnable image, or to builds of the same application source revision where at
+// least one side is an unversioned/floating build.  This avoids false positives
+// for registries that publish both a semver tag and a separate latest/main image
+// from the same commit, while still reporting normal digest changes for pinned
+// semver tags.
+func SameEffectiveImage(a, b ImageVersion) bool {
+	if normalizeImageID(a.ID) != "" && normalizeImageID(a.ID) == normalizeImageID(b.ID) {
+		return true
+	}
+	if strings.TrimSpace(a.Revision) == "" || strings.TrimSpace(b.Revision) == "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(a.Revision), strings.TrimSpace(b.Revision)) {
+		return false
+	}
+	if releaseTag(a) == "" || releaseTag(b) == "" {
+		return true
+	}
+	return releaseTag(a) == releaseTag(b) && (isFloatingRef(a.Ref) || isFloatingRef(b.Ref))
+}
+
 func (c *Client) InspectImageVersion(ctx context.Context, ref string) (ImageVersion, error) {
 	var data map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, "/images/"+url.PathEscape(ref)+"/json", nil, &data); err != nil {
@@ -65,6 +88,7 @@ func (c *Client) InspectImageVersion(ctx context.Context, ref string) (ImageVers
 	} else if id, _ := data["ID"].(string); id != "" {
 		v.ID = id
 	}
+	v.Revision = imageRevisionLabel(data)
 
 	if digests, _ := data["RepoDigests"].([]any); len(digests) > 0 {
 		for _, raw := range digests {
@@ -94,14 +118,29 @@ func (c *Client) InspectImageVersion(ctx context.Context, ref string) (ImageVers
 }
 
 func imageVersionLabel(data map[string]any) string {
-	cfg, _ := data["Config"].(map[string]any)
-	labels, _ := cfg["Labels"].(map[string]any)
+	labels := imageLabels(data)
 	for _, key := range []string{"org.opencontainers.image.version", "org.label-schema.version", "version"} {
 		if v := strings.TrimSpace(str(labels[key])); v != "" && v != "latest" && v != "main" && v != "nightly" {
 			return v
 		}
 	}
 	return ""
+}
+
+func imageRevisionLabel(data map[string]any) string {
+	labels := imageLabels(data)
+	for _, key := range []string{"org.opencontainers.image.revision", "org.label-schema.vcs-ref", "vcs-ref"} {
+		if v := strings.TrimSpace(str(labels[key])); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func imageLabels(data map[string]any) map[string]any {
+	cfg, _ := data["Config"].(map[string]any)
+	labels, _ := cfg["Labels"].(map[string]any)
+	return labels
 }
 
 func (c *Client) InspectImageVersionByID(ctx context.Context, imageID string) (ImageVersion, error) {
@@ -123,6 +162,7 @@ func (c *Client) InspectLocalImageVersionByIDWithRef(ctx context.Context, imageI
 	} else if id, _ := data["ID"].(string); id != "" {
 		v.ID = id
 	}
+	v.Revision = imageRevisionLabel(data)
 	if tag := tagFromRef(imageRef); tag != "" && tag != "latest" && !isBareDigestTag(tag) {
 		v.Tag = tag
 	}
@@ -258,6 +298,10 @@ func (c *Client) EnrichRemoteVersionTag(ctx context.Context, v *ImageVersion, re
 	}
 	if tag, err := c.LookupVersionTag(ctx, ref, v.Digest); err == nil {
 		v.RemoteTag = tag
+		return
+	}
+	if tag, err := c.LookupVersionTagByRevision(ctx, ref, v.Revision); err == nil {
+		v.RemoteTag = tag
 	}
 }
 
@@ -285,6 +329,17 @@ func (c *Client) LookupVersionTag(ctx context.Context, ref, digest string) (stri
 		return lookupOCIRegistryVersionTag(ctx, registry, repo, digest)
 	}
 	return lookupDockerHubVersionTag(ctx, ref, digest)
+}
+
+func (c *Client) LookupVersionTagByRevision(ctx context.Context, ref, revision string) (string, error) {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return "", fmt.Errorf("empty revision")
+	}
+	if registry, repo, ok := registryRepo(ref); ok && registry == "ghcr.io" {
+		return lookupOCIRegistryVersionTagByRevision(ctx, registry, repo, revision)
+	}
+	return "", fmt.Errorf("revision tag lookup is not supported for %s", ref)
 }
 
 func lookupDockerHubVersionTag(ctx context.Context, ref, digest string) (string, error) {
@@ -346,6 +401,79 @@ func lookupDockerHubVersionTag(ctx context.Context, ref, digest string) (string,
 
 func lookupOCIRegistryVersionTag(ctx context.Context, registry, repo, digest string) (string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
+	token, err := ociRegistryToken(ctx, client, registry, repo)
+	if err != nil {
+		return "", err
+	}
+	tags, err := ociRegistryTags(ctx, client, registry, repo, token)
+	if err != nil {
+		return "", err
+	}
+	candidates := []string{}
+	for _, tag := range tags {
+		if tag == "" || tag == "latest" || strings.HasSuffix(tag, "-latest") || isBareDigestTag(tag) {
+			continue
+		}
+		if !semverTagRE.MatchString(tag) {
+			continue
+		}
+		manifestURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, repo, url.PathEscape(tag))
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", ociManifestAcceptHeader())
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		tagDigest := resp.Header.Get("Docker-Content-Digest")
+		resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 && canonicalDigest(tagDigest) == digest {
+			candidates = append(candidates, tag)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no matching tag found for %s", digest)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return tagScore(candidates[i]) > tagScore(candidates[j])
+	})
+	return candidates[0], nil
+}
+
+func lookupOCIRegistryVersionTagByRevision(ctx context.Context, registry, repo, revision string) (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	token, err := ociRegistryToken(ctx, client, registry, repo)
+	if err != nil {
+		return "", err
+	}
+	tags, err := ociRegistryTags(ctx, client, registry, repo, token)
+	if err != nil {
+		return "", err
+	}
+	candidates := []string{}
+	for _, tag := range tags {
+		if tag == "" || tag == "latest" || strings.HasSuffix(tag, "-latest") || isBareDigestTag(tag) || !semverTagRE.MatchString(tag) {
+			continue
+		}
+		tagRevision, err := ociManifestRevision(ctx, client, registry, repo, token, tag)
+		if err == nil && strings.EqualFold(strings.TrimSpace(tagRevision), revision) {
+			candidates = append(candidates, tag)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no matching revision tag found for %s", revision)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return tagScore(candidates[i]) > tagScore(candidates[j])
+	})
+	return candidates[0], nil
+}
+
+func ociRegistryToken(ctx context.Context, client *http.Client, registry, repo string) (string, error) {
 	tokenURL := fmt.Sprintf("https://%s/token?service=%s&scope=%s", registry, registry, url.QueryEscape("repository:"+repo+":pull"))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
 	if err != nil {
@@ -369,66 +497,128 @@ func lookupOCIRegistryVersionTag(ctx context.Context, registry, repo, digest str
 	if tokenResp.Token == "" {
 		return "", fmt.Errorf("empty registry token")
 	}
+	return tokenResp.Token, nil
+}
 
+func ociRegistryTags(ctx context.Context, client *http.Client, registry, repo, token string) ([]string, error) {
 	tagsURL := fmt.Sprintf("https://%s/v2/%s/tags/list?n=1000", registry, repo)
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, tagsURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tagsURL, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+tokenResp.Token)
-	resp, err = client.Do(req)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	body, _ = io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("registry tags request failed: %s", resp.Status)
+		return nil, fmt.Errorf("registry tags request failed: %s", resp.Status)
 	}
 	var tagsResp struct {
 		Tags []string `json:"tags"`
 	}
 	if err := json.Unmarshal(body, &tagsResp); err != nil {
+		return nil, err
+	}
+	return tagsResp.Tags, nil
+}
+
+func ociManifestRevision(ctx context.Context, client *http.Client, registry, repo, token, ref string) (string, error) {
+	manifest, err := ociManifest(ctx, client, registry, repo, token, ref)
+	if err != nil {
 		return "", err
 	}
-	candidates := []string{}
-	for _, tag := range tagsResp.Tags {
-		if tag == "" || tag == "latest" || strings.HasSuffix(tag, "-latest") || isBareDigestTag(tag) {
-			continue
-		}
-		if !semverTagRE.MatchString(tag) {
-			continue
-		}
-		manifestURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, repo, url.PathEscape(tag))
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Authorization", "Bearer "+tokenResp.Token)
-		req.Header.Set("Accept", strings.Join([]string{
-			"application/vnd.oci.image.index.v1+json",
-			"application/vnd.docker.distribution.manifest.list.v2+json",
-			"application/vnd.oci.image.manifest.v1+json",
-			"application/vnd.docker.distribution.manifest.v2+json",
-		}, ", "))
-		resp, err = client.Do(req)
-		if err != nil {
-			continue
-		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		tagDigest := resp.Header.Get("Docker-Content-Digest")
-		resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 && canonicalDigest(tagDigest) == digest {
-			candidates = append(candidates, tag)
+	if cfg, _ := manifest["config"].(map[string]any); cfg != nil {
+		if digest := strings.TrimSpace(str(cfg["digest"])); digest != "" {
+			return ociConfigRevision(ctx, client, registry, repo, token, digest)
 		}
 	}
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("no matching tag found for %s", digest)
+	manifests, _ := manifest["manifests"].([]any)
+	if len(manifests) == 0 {
+		return "", fmt.Errorf("manifest has no config")
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return tagScore(candidates[i]) > tagScore(candidates[j])
-	})
-	return candidates[0], nil
+	childDigest := ""
+	for _, raw := range manifests {
+		m, _ := raw.(map[string]any)
+		platform, _ := m["platform"].(map[string]any)
+		if str(platform["os"]) == "linux" && str(platform["architecture"]) == "amd64" {
+			childDigest = strings.TrimSpace(str(m["digest"]))
+			break
+		}
+	}
+	if childDigest == "" {
+		m, _ := manifests[0].(map[string]any)
+		childDigest = strings.TrimSpace(str(m["digest"]))
+	}
+	if childDigest == "" {
+		return "", fmt.Errorf("manifest index has no child digest")
+	}
+	return ociManifestRevision(ctx, client, registry, repo, token, childDigest)
+}
+
+func ociManifest(ctx context.Context, client *http.Client, registry, repo, token, ref string) (map[string]any, error) {
+	manifestURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, repo, url.PathEscape(ref))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", ociManifestAcceptHeader())
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("registry manifest request failed: %s", resp.Status)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return nil, err
+	}
+	return manifest, nil
+}
+
+func ociConfigRevision(ctx context.Context, client *http.Client, registry, repo, token, digest string) (string, error) {
+	blobURL := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, repo, url.PathEscape(digest))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, blobURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("registry config request failed: %s", resp.Status)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return "", err
+	}
+	config, _ := cfg["config"].(map[string]any)
+	labels, _ := config["Labels"].(map[string]any)
+	for _, key := range []string{"org.opencontainers.image.revision", "org.label-schema.vcs-ref", "vcs-ref"} {
+		if v := strings.TrimSpace(str(labels[key])); v != "" {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("revision label not found")
+}
+
+func ociManifestAcceptHeader() string {
+	return strings.Join([]string{
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", ")
 }
 
 type digestImage struct{ Digest string }
@@ -536,8 +726,34 @@ func canonicalDigest(digest string) string {
 	return ""
 }
 
+func normalizeImageID(id string) string {
+	return strings.TrimPrefix(strings.TrimSpace(id), "sha256:")
+}
+
+func releaseTag(v ImageVersion) string {
+	for _, tag := range []string{v.Tag, v.RemoteTag} {
+		tag = strings.TrimSpace(tag)
+		if semverTagRE.MatchString(tag) {
+			return tag
+		}
+	}
+	return ""
+}
+
+func isFloatingRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.HasPrefix(ref, "sha256:") || strings.Contains(ref, "@sha256:") || isBareDigestTag(ref) {
+		return false
+	}
+	tag := tagFromRef(ref)
+	if tag == "" {
+		return true
+	}
+	return tag == "latest" || tag == "main" || tag == "nightly" || strings.HasSuffix(tag, "-latest")
+}
+
 func shortID(id string) string {
-	id = strings.TrimPrefix(strings.TrimSpace(id), "sha256:")
+	id = normalizeImageID(id)
 	if len(id) > 12 {
 		return id[:12]
 	}

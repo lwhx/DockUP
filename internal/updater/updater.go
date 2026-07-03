@@ -354,7 +354,7 @@ func (u *Updater) checkContainer(ctx context.Context, c dockerx.ContainerInfo, m
 		}
 		return "", nil, "", err
 	}
-	if normalizeID(oldVersion.ID) == normalizeID(newVersion.ID) {
+	if dockerx.SameEffectiveImage(oldVersion, newVersion) {
 		return "", nil, "", nil
 	}
 

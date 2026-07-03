@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.14
+
+- 修复 Parrot 等镜像在 `latest` 指向同一源码 revision 的 `main` 构建时被误报更新的问题。
+- 优化 GHCR 版本识别：当 digest 无法直接匹配数字版本 tag 时，会按 OCI revision 反查同 commit 的语义化版本，避免只显示短镜像 ID。
+
 ## v0.7.13
 
 - 修复容器实际更新完成后，Telegram 消息仍可能停留在“正在更新”的问题：成功/失败消息编辑现在使用独立短超时上下文，并记录编辑失败日志。

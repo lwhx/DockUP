@@ -933,7 +933,7 @@ func (u *Updater) manualProjectCheck(ctx context.Context, messageID int64, key s
 			u.log.Warn("manual check failed", "container", c.Name, "error", err)
 			continue
 		}
-		if normalizeID(oldV.ID) != normalizeID(newV.ID) {
+		if !dockerx.SameEffectiveImage(oldV, newV) {
 			updates = append(updates, pendingUpdate{Token: randomToken(), Container: c, OldVersion: oldV, NewVersion: newV, MessageID: messageID, CreatedAt: time.Now()})
 		}
 	}
