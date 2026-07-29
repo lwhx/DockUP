@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shuijiao1/DockUP/internal/dockerx"
+	"github.com/shui1iao/DockUP/internal/dockerx"
 )
 
 type Server struct {

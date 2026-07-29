@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shuijiao1/DockUP/internal/agent"
-	"github.com/shuijiao1/DockUP/internal/config"
-	"github.com/shuijiao1/DockUP/internal/dockerx"
-	"github.com/shuijiao1/DockUP/internal/reverse"
-	"github.com/shuijiao1/DockUP/internal/telegram"
+	"github.com/shui1iao/DockUP/internal/agent"
+	"github.com/shui1iao/DockUP/internal/config"
+	"github.com/shui1iao/DockUP/internal/dockerx"
+	"github.com/shui1iao/DockUP/internal/reverse"
+	"github.com/shui1iao/DockUP/internal/telegram"
 )
 
 type CheckSummary struct {

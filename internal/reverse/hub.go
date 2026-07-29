@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shuijiao1/DockUP/internal/agent"
-	"github.com/shuijiao1/DockUP/internal/config"
+	"github.com/shui1iao/DockUP/internal/agent"
+	"github.com/shui1iao/DockUP/internal/config"
 )
 
 type Hub struct {

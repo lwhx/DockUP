@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/shuijiao1/DockUP/internal/agent"
-	"github.com/shuijiao1/DockUP/internal/config"
+	"github.com/shui1iao/DockUP/internal/agent"
+	"github.com/shui1iao/DockUP/internal/config"
 )
 
 type Client struct{ hub *Hub }

@@ -1,6 +1,6 @@
 services:
   dockup:
-    image: ghcr.io/shuijiao1/dockup:latest
+    image: ghcr.io/shui1iao/dockup:latest
     container_name: dockup
     restart: unless-stopped
     environment:

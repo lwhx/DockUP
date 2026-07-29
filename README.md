@@ -3,7 +3,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Manager%20%2B%20Updater-2496ED?logo=docker&logoColor=white)
 ![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/github/v/release/shuijiao1/DockUP?label=Release)
+![Version](https://img.shields.io/github/v/release/shui1iao/DockUP?label=Release)
 ![GHCR](https://img.shields.io/badge/GHCR-dockup-blue)
 
 **中文** | [English](README.en.md)
@@ -40,7 +40,7 @@ DockUP 不做 Web 面板，不删除 volume；发现更新后由你在 Telegram 
 
 ```bash
 mkdir -p /opt/dockup && cd /opt/dockup
-curl -Lo docker-compose.yml https://github.com/shuijiao1/DockUP/releases/latest/download/docker-compose.yml
+curl -Lo docker-compose.yml https://github.com/shui1iao/DockUP/releases/latest/download/docker-compose.yml
 cat > .env <<'ENV'
 TZ=Asia/Shanghai
 TG_BOT_TOKEN=你的 Telegram Bot Token
@@ -62,7 +62,7 @@ docker compose logs -f
 ```yaml
 services:
   dockup:
-    image: ghcr.io/shuijiao1/dockup:latest
+    image: ghcr.io/shui1iao/dockup:latest
     container_name: dockup
     restart: unless-stopped
     environment:
@@ -249,8 +249,8 @@ DockUP 设计上就是“发现更新就直接推送按钮给你”。这很方�
 ## 📦 镜像
 
 ```bash
-docker pull ghcr.io/shuijiao1/dockup:latest
-docker pull ghcr.io/shuijiao1/dockup:<version>
+docker pull ghcr.io/shui1iao/dockup:latest
+docker pull ghcr.io/shui1iao/dockup:<version>
 ```
 
 支持架构：

@@ -3,7 +3,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Manager%20%2B%20Updater-2496ED?logo=docker&logoColor=white)
 ![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/github/v/release/shuijiao1/DockUP?label=Release)
+![Version](https://img.shields.io/github/v/release/shui1iao/DockUP?label=Release)
 ![GHCR](https://img.shields.io/badge/GHCR-dockup-blue)
 
 [中文](README.md) | **English**
@@ -40,7 +40,7 @@ Docker Compose is recommended:
 
 ```bash
 mkdir -p /opt/dockup && cd /opt/dockup
-curl -Lo docker-compose.yml https://github.com/shuijiao1/DockUP/releases/latest/download/docker-compose.yml
+curl -Lo docker-compose.yml https://github.com/shui1iao/DockUP/releases/latest/download/docker-compose.yml
 cat > .env <<'ENV'
 TZ=Asia/Shanghai
 TG_BOT_TOKEN=your Telegram bot token
@@ -62,7 +62,7 @@ Or write your own compose file:
 ```yaml
 services:
   dockup:
-    image: ghcr.io/shuijiao1/dockup:latest
+    image: ghcr.io/shui1iao/dockup:latest
     container_name: dockup
     restart: unless-stopped
     environment:
@@ -236,8 +236,8 @@ If you need allowlists, complex approval workflows, multiple notification channe
 ## 📦 Image
 
 ```bash
-docker pull ghcr.io/shuijiao1/dockup:latest
-docker pull ghcr.io/shuijiao1/dockup:<version>
+docker pull ghcr.io/shui1iao/dockup:latest
+docker pull ghcr.io/shui1iao/dockup:<version>
 ```
 
 Supported platforms:

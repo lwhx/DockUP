@@ -230,7 +230,7 @@ func (c *Client) EnrichBundledAppVersion(ctx context.Context, v *ImageVersion, r
 		if tag, err := c.readBundledVersion(ctx, image, "/app/TGBot_RSS", 32<<20, tgbotRSSVersionRE); err == nil && tag != "" {
 			v.Tag = tag
 		}
-	case strings.Contains(lowRef, "ghcr.io/shuijiao1/guko"):
+	case strings.Contains(lowRef, "ghcr.io/shui1iao/guko"):
 		if tag, err := c.readBundledVersion(ctx, image, "/app/bot.py", 1<<20, gukoVersionRE); err == nil && tag != "" {
 			v.Tag = tag
 		}

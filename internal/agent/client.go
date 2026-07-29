@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shuijiao1/DockUP/internal/config"
+	"github.com/shui1iao/DockUP/internal/config"
 )
 
 type Client struct {

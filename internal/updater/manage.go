@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shuijiao1/DockUP/internal/agent"
-	"github.com/shuijiao1/DockUP/internal/config"
-	"github.com/shuijiao1/DockUP/internal/dockerx"
-	"github.com/shuijiao1/DockUP/internal/telegram"
+	"github.com/shui1iao/DockUP/internal/agent"
+	"github.com/shui1iao/DockUP/internal/config"
+	"github.com/shui1iao/DockUP/internal/dockerx"
+	"github.com/shui1iao/DockUP/internal/telegram"
 )
 
 func (u *Updater) handleManageCallback(ctx context.Context, cb telegram.Callback) bool {
@@ -379,7 +379,7 @@ func looksLikeAgentAddress(text string) bool {
 }
 
 func (u *Updater) installCommand(pair config.PendingPair) string {
-	image := "ghcr.io/shuijiao1/dockup:latest"
+	image := "ghcr.io/shui1iao/dockup:latest"
 	center := u.cfg.PublicURL
 	if center == "" {
 		center = "http://<中心端IP或域名>:8748"

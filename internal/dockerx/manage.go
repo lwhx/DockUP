@@ -166,7 +166,7 @@ func shouldInspectImageVersion(image string) bool {
 	if image == "" || strings.HasPrefix(image, "sha256:") || strings.Contains(image, "@sha256:") {
 		return false
 	}
-	return strings.HasPrefix(image, "ghcr.io/shuijiao1/") ||
+	return strings.HasPrefix(image, "ghcr.io/shui1iao/") ||
 		strings.HasPrefix(image, "xream/sub-store") ||
 		strings.HasPrefix(image, "kwxos/tgbot-rss")
 }
