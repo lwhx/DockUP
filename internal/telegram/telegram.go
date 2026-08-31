@@ -6,16 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 )
 
 type Bot struct {
-	token  string
-	chatID string
-	client *http.Client
-	offset int64
+	token        string
+	chatID       string
+	client       *http.Client
+	apiBaseURL   string
+	pollRetryMin time.Duration
+	pollRetryMax time.Duration
+	offset       int64
 }
 
 type Callback struct {
@@ -199,6 +203,20 @@ func (b *Bot) PollCallbacks(ctx context.Context, out chan<- Callback) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}
+	retryMin := b.pollRetryMin
+	if retryMin <= 0 {
+		retryMin = 3 * time.Second
+	}
+	retryMax := b.pollRetryMax
+	if retryMax < retryMin {
+		retryMax = 30 * time.Second
+		if retryMax < retryMin {
+			retryMax = retryMin
+		}
+	}
+	retryDelay := retryMin
+	consecutiveErrors := 0
+	lastErrorLog := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -207,9 +225,31 @@ func (b *Bot) PollCallbacks(ctx context.Context, out chan<- Callback) error {
 		}
 		updates, err := b.getUpdates(ctx)
 		if err != nil {
-			time.Sleep(3 * time.Second)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			consecutiveErrors++
+			now := time.Now()
+			if consecutiveErrors == 1 || now.Sub(lastErrorLog) >= time.Minute {
+				slog.Warn("telegram callback polling failed; retrying", "error", b.redactError(err), "failures", consecutiveErrors, "retry_in", retryDelay)
+				lastErrorLog = now
+			}
+			if !waitContext(ctx, retryDelay) {
+				return ctx.Err()
+			}
+			if retryDelay < retryMax {
+				retryDelay *= 2
+				if retryDelay > retryMax {
+					retryDelay = retryMax
+				}
+			}
 			continue
 		}
+		if consecutiveErrors > 0 {
+			slog.Info("telegram callback polling recovered", "failures", consecutiveErrors)
+			consecutiveErrors = 0
+		}
+		retryDelay = retryMin
 		for _, u := range updates {
 			if u.UpdateID >= b.offset {
 				b.offset = u.UpdateID + 1
@@ -265,6 +305,28 @@ func (b *Bot) PollCallbacks(ctx context.Context, out chan<- Callback) error {
 	}
 }
 
+func (b *Bot) redactError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	if b != nil && b.token != "" {
+		message = strings.ReplaceAll(message, b.token, "[redacted]")
+	}
+	return message
+}
+
+func waitContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 func (b *Bot) getUpdates(ctx context.Context) ([]update, error) {
 	payload := map[string]any{
 		"offset":          b.offset,
@@ -307,7 +369,11 @@ func (b *Bot) call(ctx context.Context, method string, payload any, out any) err
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/%s", b.token, method)
+	baseURL := strings.TrimRight(strings.TrimSpace(b.apiBaseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://api.telegram.org"
+	}
+	url := fmt.Sprintf("%s/bot%s/%s", baseURL, b.token, method)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -322,15 +388,15 @@ func (b *Bot) call(ctx context.Context, method string, payload any, out any) err
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram %s failed: %s %s", method, resp.Status, strings.TrimSpace(string(respBody)))
 	}
-	if out == nil {
-		return nil
-	}
 	var parsed apiResp[json.RawMessage]
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return err
 	}
 	if !parsed.OK {
 		return fmt.Errorf("telegram %s failed: %s", method, parsed.Description)
+	}
+	if out == nil {
+		return nil
 	}
 	return json.Unmarshal(parsed.Result, out)
 }

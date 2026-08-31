@@ -133,11 +133,7 @@ func New(cfg config.Config, docker *dockerx.Client, bot *telegram.Bot, log *slog
 func (u *Updater) Run(ctx context.Context) error {
 	callbacks := make(chan telegram.Callback, 32)
 	if u.bot.Enabled() {
-		go func() {
-			if err := u.bot.PollCallbacks(ctx, callbacks); err != nil && err != context.Canceled {
-				u.log.Warn("telegram callback polling stopped", "error", err)
-			}
-		}()
+		go u.runCallbackPolling(ctx, callbacks)
 	}
 
 	if u.cfg.RunOnce {
@@ -171,6 +167,7 @@ func (u *Updater) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case cb := <-callbacks:
+			u.log.Info("telegram callback received", "action", callbackAction(cb.Data))
 			go u.handleCallback(ctx, cb)
 		case <-pairTicker.C:
 			u.checkPendingPairs(ctx)
@@ -192,6 +189,46 @@ func (u *Updater) Run(ctx context.Context) error {
 				tick = nil
 			}
 		}
+	}
+}
+
+func (u *Updater) runCallbackPolling(ctx context.Context, callbacks chan<- telegram.Callback) {
+	for {
+		err := u.bot.PollCallbacks(ctx, callbacks)
+		if ctx.Err() != nil {
+			return
+		}
+		u.log.Warn("telegram callback polling stopped; restarting", "error", err)
+		if !waitForCallbackRetry(ctx, 3*time.Second) {
+			return
+		}
+	}
+}
+
+func waitForCallbackRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func callbackAction(data string) string {
+	data = strings.TrimSpace(data)
+	if data == "" {
+		return "empty"
+	}
+	if i := strings.IndexByte(data, ':'); i >= 0 {
+		return data[:i]
+	}
+	switch data {
+	case "home", "addserver", "agents", "main", "checkall", "settings", "cancel":
+		return data
+	default:
+		return "unknown"
 	}
 }
 
@@ -416,11 +453,18 @@ func (u *Updater) handleCallback(parent context.Context, cb telegram.Callback) {
 	}
 	parts := strings.SplitN(cb.Data, ":", 2)
 	if len(parts) != 2 {
+		_ = u.bot.AnswerCallback(parent, cb.ID, "操作无效或按钮版本过旧")
+		u.log.Warn("unhandled telegram callback", "action", callbackAction(cb.Data))
 		return
 	}
 	action, token := parts[0], parts[1]
 	if action == "noop" {
 		_ = u.bot.AnswerCallback(parent, cb.ID, "测试按钮，无操作")
+		return
+	}
+	if action != "ignore" && action != "update" {
+		_ = u.bot.AnswerCallback(parent, cb.ID, "操作无效或按钮版本过旧")
+		u.log.Warn("unhandled telegram callback", "action", callbackAction(cb.Data))
 		return
 	}
 
